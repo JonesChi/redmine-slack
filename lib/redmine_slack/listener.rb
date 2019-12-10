@@ -4,10 +4,9 @@ class SlackListener < Redmine::Hook::Listener
 	def redmine_slack_issues_new_after_save(context={})
 		issue = context[:issue]
 
-		channel = channel_for_project issue.project
-		url = url_for_project issue.project
+		channel = channel_for_user issue.assigned_to.try(:mail)
 
-		return unless channel and url
+		return unless channel
 		return if issue.is_private?
 
 		msg = "[#{escape issue.project}] #{escape issue.author} created <#{object_url issue}|#{escape issue}>#{mentions issue.description}"
@@ -34,17 +33,23 @@ class SlackListener < Redmine::Hook::Listener
 			:short => true
 		} if Setting.plugin_redmine_slack['display_watchers'] == 'yes'
 
-		speak msg, channel, attachment, url
+		speak msg, channel, attachment
+
+		return unless Setting.plugin_redmine_slack['post_watchers'] == '1'
+		for user in issue.watcher_users
+			next if user == issue.assigned_to
+			channel = channel_for_user user.try(:mail)
+			speak msg, channel, attachment if channel
+		end
 	end
 
 	def redmine_slack_issues_edit_after_save(context={})
 		issue = context[:issue]
 		journal = context[:journal]
 
-		channel = channel_for_project issue.project
-		url = url_for_project issue.project
+		channel = channel_for_user issue.assigned_to.try(:mail)
 
-		return unless channel and url and Setting.plugin_redmine_slack['post_updates'] == '1'
+		return unless channel and Setting.plugin_redmine_slack['post_updates'] == '1'
 		return if issue.is_private?
 		return if journal.private_notes?
 
@@ -54,7 +59,15 @@ class SlackListener < Redmine::Hook::Listener
 		attachment[:text] = escape journal.notes if journal.notes
 		attachment[:fields] = journal.details.map { |d| detail_to_field d }
 
-		speak msg, channel, attachment, url
+
+		speak msg, channel, attachment
+
+		return unless Setting.plugin_redmine_slack['post_watchers'] == '1'
+		for user in issue.watcher_users
+			next if user == issue.assigned_to
+			channel = channel_for_user user.try(:mail)
+			speak msg, channel, attachment if channel
+		end
 	end
 
 	def model_changeset_scan_commit_for_issue_ids_pre_issue_update(context={})
@@ -62,10 +75,9 @@ class SlackListener < Redmine::Hook::Listener
 		journal = issue.current_journal
 		changeset = context[:changeset]
 
-		channel = channel_for_project issue.project
-		url = url_for_project issue.project
+		channel = channel_for_user issue.assigned_to.try(:mail)
 
-		return unless channel and url and issue.save
+		return unless channel and issue.save
 		return if issue.is_private?
 
 		msg = "[#{escape issue.project}] #{escape journal.user.to_s} updated <#{object_url issue}|#{escape issue}>"
@@ -101,7 +113,14 @@ class SlackListener < Redmine::Hook::Listener
 		attachment[:text] = ll(Setting.default_language, :text_status_changed_by_changeset, "<#{revision_url}|#{escape changeset.comments}>")
 		attachment[:fields] = journal.details.map { |d| detail_to_field d }
 
-		speak msg, channel, attachment, url
+		speak msg, channel, attachment
+
+		return unless Setting.plugin_redmine_slack['post_watchers'] == '1'
+		for user in issue.watcher_users
+			next if user == issue.assigned_to
+			channel = channel_for_user user.try(:mail)
+			speak msg, channel, attachment if channel
+		end
 	end
 
 	def controller_wiki_edit_after_save(context = { })
@@ -118,8 +137,8 @@ class SlackListener < Redmine::Hook::Listener
 			comment << " [<#{object_url page}/diff?version=#{page.content.version}|difference>]"
 		end
 
-		channel = channel_for_project project
-		url = url_for_project project
+		channel = channel_for_user user.try(:mail)
+		return unless channel
 
 		attachment = nil
 		if not page.content.comments.empty?
@@ -127,11 +146,20 @@ class SlackListener < Redmine::Hook::Listener
 			attachment[:text] = "#{escape page.content.comments}"
 		end
 
-		speak comment, channel, attachment, url
+		speak comment, channel, attachment
+
+		return unless Setting.plugin_redmine_slack['post_wiki_watchers'] == '1'
+		for user in page.watcher_users
+			next if user == page.content.author
+			channel = channel_for_user user.try(:mail)
+			speak comment, channel, attachment if channel
+		end
 	end
 
-	def speak(msg, channel, attachment=nil, url=nil)
-		url = Setting.plugin_redmine_slack['slack_url'] if not url
+	def speak(msg, channel, attachment=nil)
+		bot_token = Setting.plugin_redmine_slack['bot_token']
+		return nil if bot_token.blank?
+
 		username = Setting.plugin_redmine_slack['username']
 		icon = Setting.plugin_redmine_slack['icon']
 
@@ -157,7 +185,9 @@ class SlackListener < Redmine::Hook::Listener
 			client = HTTPClient.new
 			client.ssl_config.cert_store.set_default_paths
 			client.ssl_config.ssl_version = :auto
-			client.post_async url, {:payload => params.to_json}
+			client.post_async "https://slack.com/api/chat.postMessage",
+				params.to_json,
+				{"Authorization": "Bearer #{bot_token}", "Content-Type": "application/json; charset=utf-8"}
 		rescue Exception => e
 			Rails.logger.warn("cannot connect to #{url}")
 			Rails.logger.warn(e)
@@ -198,20 +228,33 @@ private
 		].find{|v| v.present?}
 	end
 
-	def channel_for_project(proj)
-		return nil if proj.blank?
+	def channel_for_user(email)
+		return nil if email.blank?
 
-		cf = ProjectCustomField.find_by_name("Slack Channel")
+		if Setting.plugin_redmine_slack['user_channels'].nil?
+			Setting.plugin_redmine_slack['user_channels'] = {}
+		end
+		channel = Setting.plugin_redmine_slack['user_channels'][email]
+		return channel if channel.present?
 
-		val = [
-			(proj.custom_value_for(cf).value rescue nil),
-			(channel_for_project proj.parent),
-			Setting.plugin_redmine_slack['channel'],
-		].find{|v| v.present?}
+		bot_token = Setting.plugin_redmine_slack['bot_token']
+		return nil if bot_token.blank?
+		begin
+			client = HTTPClient.new
+			client.ssl_config.cert_store.set_default_paths
+			client.ssl_config.ssl_version = :auto
 
-		# Channel name '-' is reserved for NOT notifying
-		return nil if val.to_s == '-'
-		val
+			resp = client.get "https://slack.com/api/users.lookupByEmail", {"token"=>bot_token, "email"=>email}
+			user_id = JSON.parse(resp.content)["user"]["id"]
+
+			resp = client.post "https://slack.com/api/im.open", {"token"=>bot_token, "user"=>user_id}
+			channel = JSON.parse(resp.content)["channel"]["id"]
+			Setting.plugin_redmine_slack['user_channels'][email] = channel
+			return channel
+		rescue Exception => e
+			Rails.logger.warn("cannot get channel for user with email #{email}")
+			Rails.logger.warn(e)
+		end
 	end
 
 	def detail_to_field(detail)

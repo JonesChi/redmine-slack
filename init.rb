@@ -14,8 +14,7 @@ Redmine::Plugin.register :redmine_slack do
 
 	settings \
 		:default => {
-			'callback_url' => 'http://slack.com/callback/',
-			'channel' => nil,
+			'bot_token' => nil,
 			'icon' => 'https://raw.github.com/sciyoshi/redmine-slack/gh-pages/icon.png',
 			'username' => 'redmine',
 			'display_watchers' => 'no'
