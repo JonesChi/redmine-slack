@@ -33,7 +33,9 @@ class SlackListener < Redmine::Hook::Listener
 			:short => true
 		} if Setting.plugin_redmine_slack['display_watchers'] == 'yes'
 
-		speak msg, channel, attachment
+		if Setting.plugin_redmine_slack['skip_author'] != '1' or issue.author != issue.assigned_to
+			speak msg, channel, attachment
+		end
 
 		return unless Setting.plugin_redmine_slack['post_watchers'] == '1'
 		for user in issue.watcher_users
@@ -59,8 +61,9 @@ class SlackListener < Redmine::Hook::Listener
 		attachment[:text] = escape journal.notes if journal.notes
 		attachment[:fields] = journal.details.map { |d| detail_to_field d }
 
-
-		speak msg, channel, attachment
+		if Setting.plugin_redmine_slack['skip_author'] != '1' or journal.user != issue.assigned_to
+			speak msg, channel, attachment
+		end
 
 		return unless Setting.plugin_redmine_slack['post_watchers'] == '1'
 		for user in issue.watcher_users
@@ -113,7 +116,9 @@ class SlackListener < Redmine::Hook::Listener
 		attachment[:text] = ll(Setting.default_language, :text_status_changed_by_changeset, "<#{revision_url}|#{escape changeset.comments}>")
 		attachment[:fields] = journal.details.map { |d| detail_to_field d }
 
-		speak msg, channel, attachment
+		if Setting.plugin_redmine_slack['skip_author'] != '1' or journal.user != issue.assigned_to
+			speak msg, channel, attachment
+		end
 
 		return unless Setting.plugin_redmine_slack['post_watchers'] == '1'
 		for user in issue.watcher_users
@@ -146,7 +151,9 @@ class SlackListener < Redmine::Hook::Listener
 			attachment[:text] = "#{escape page.content.comments}"
 		end
 
-		speak comment, channel, attachment
+		if Setting.plugin_redmine_slack['skip_author'] != '1'
+			speak comment, channel, attachment
+		end
 
 		return unless Setting.plugin_redmine_slack['post_wiki_watchers'] == '1'
 		for user in page.watcher_users
