@@ -1,4 +1,4 @@
-module RedmineSlack
+module RedmineSlackDm
 	module IssuePatch
 		def self.included(base) # :nodoc:
 			base.extend(ClassMethods)
