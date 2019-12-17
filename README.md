@@ -25,4 +25,7 @@ You will also need the `httpclient` dependency, which can be installed by runnin
 from the plugin directory.
 
 Restart Redmine, and you should see the plugin show up in the Plugins page.
-Under the configuration options, set the Slack bot token of your Slack bot.
+Under the configuration options, set the Slack bot token with your Slack bot OAuth
+Access Token.
+
+Required bot token scopes: `im:write`, `chat:write`, `users:read.email`
